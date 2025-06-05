@@ -42,4 +42,4 @@ demo = gr.ChatInterface(
 
 # Launch the interface
 if __name__ == "__main__":
-    demo.launch(share=False)  # share=False for local only 
+    demo.launch(server_name="0.0.0.0", server_port=7860, share=False) 
