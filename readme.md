@@ -15,6 +15,7 @@ Uploads the Walmart annual report to Pinecone for analysis and querying.
 ### Demo Application
 
 `demo.py` - A Gradio web interface for interacting with the Berkshire database.
+live on http://www.berkshire-bot.com/
 
 ### Podcast Transcripts
 
