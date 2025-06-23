@@ -12,9 +12,10 @@ Imports my diet and alcohol docs from Google Drive into Pinecone for document re
 
 Uploads the Walmart annual report to Pinecone for analysis and querying.
 
-### Demo Application
+### A Chat interface for interacting with the Berkshire database.
 
-`demo.py` - A Gradio web interface for interacting with the Berkshire database.
+`demo.py`
+Used Gradio
 live on http://www.berkshire-bot.com/
 
 ### Podcast Transcripts
