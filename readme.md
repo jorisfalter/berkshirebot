@@ -22,4 +22,4 @@ Uploads the Walmart annual report to Pinecone for analysis and querying.
 
 ## Usage
 
-Each script can be run independently depending on which document source you want to work with. The demo application provides a web interface for querying the indexed documents.
+Each script can be run independently depending on which document source you want to work with. The demo application provides a web interface for querying the indexed documents.g
