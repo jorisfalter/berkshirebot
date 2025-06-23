@@ -1,6 +1,25 @@
-## RAG Experiments - BerkshireBot on Github
+# RAG Experiments - BerkshireBot
 
-google drive rag > imports my diet and alcohol docs from google drive into pinecone
-walmart rag > uploads the walmart annual report to pinecone
-demo.py > demo with gradio for the Berkshire db
-upload_podcast_transcripts > upload mfm transcript
+This repository contains various RAG (Retrieval-Augmented Generation) experiments focused on different document sources.
+
+## Projects
+
+### Google Drive RAG
+
+Imports my diet and alcohol docs from Google Drive into Pinecone for document retrieval.
+
+### Walmart RAG
+
+Uploads the Walmart annual report to Pinecone for analysis and querying.
+
+### Demo Application
+
+`demo.py` - A Gradio web interface for interacting with the Berkshire database.
+
+### Podcast Transcripts
+
+`upload_podcast_transcripts.py` - Uploads MFM (My Favorite Murder) podcast transcripts to Pinecone for search and analysis.
+
+## Usage
+
+Each script can be run independently depending on which document source you want to work with. The demo application provides a web interface for querying the indexed documents.
