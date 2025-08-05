@@ -1,7 +1,7 @@
-app = "berkshire-rag-app"
+app = "berkshirebot"
 
 kill_signal = "SIGINT"
-kill_timeout = 5
+kill_timeout = 30
 
 [env]
 PORT = "7860"
@@ -19,10 +19,18 @@ PORT = "7860"
     port = 443
 
   [[services.tcp_checks]]
-    interval = 10000
-    timeout = 2000
-    grace_period = "5s"
-    restart_limit = 0 
+    interval = 15000
+    timeout = 5000
+    grace_period = "10s"
+    restart_limit = 0
+    
+  [[services.http_checks]]
+    interval = 15000
+    timeout = 5000
+    grace_period = "10s"
+    restart_limit = 0
+    method = "get"
+    path = "/"
 
 
 
