@@ -6,31 +6,15 @@ kill_timeout = 30
 [env]
 PORT = "7860"
 
-[[services]]
+[http_service]
   internal_port = 7860
-  protocol = "tcp"
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
 
-  [[services.ports]]
-    handlers = ["http"]
-    port = 80
 
-  [[services.ports]]
-    handlers = ["tls", "http"]
-    port = 443
-
-  [[services.tcp_checks]]
-    interval = 15000
-    timeout = 5000
-    grace_period = "10s"
-    restart_limit = 0
-    
-  [[services.http_checks]]
-    interval = 15000
-    timeout = 5000
-    grace_period = "10s"
-    restart_limit = 0
-    method = "get"
-    path = "/"
 
 
 
