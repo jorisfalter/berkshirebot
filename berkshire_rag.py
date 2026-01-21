@@ -12,9 +12,62 @@ class MetadataRetriever(BaseRetriever):
     vectorstore: Any = Field(description="The vector store to retrieve from")
     search_kwargs: Dict = Field(default_factory=lambda: {"k": 8})
     
+    # Query expansions for common Buffett quotes and concepts
+    QUERY_EXPANSIONS: Dict[str, List[str]] = {
+        "tide": ["swimming naked", "tide goes out", "only when the tide goes out"],
+        "swimming naked": ["tide goes out", "who's been swimming naked"],
+        "moat": ["competitive advantage", "economic moat", "durable competitive advantage"],
+        "float": ["insurance float", "cost-free float", "insurance premiums"],
+        "mr. market": ["market fluctuations", "stock market emotions"],
+        "circle of competence": ["know what you know", "stay within"],
+    }
+    
+    def _expand_query(self, query: str) -> List[str]:
+        """Expand query with related terms for better retrieval"""
+        queries = [query]
+        query_lower = query.lower()
+        
+        for trigger, expansions in self.QUERY_EXPANSIONS.items():
+            if trigger in query_lower:
+                for expansion in expansions:
+                    # Create expanded query by appending related terms
+                    queries.append(f"{query} {expansion}")
+        
+        return queries
+    
     def _get_relevant_documents(self, query: str) -> List[Document]:
-        # Get the original documents
-        docs = self.vectorstore.similarity_search(query, **self.search_kwargs)
+        k = self.search_kwargs.get("k", 8)
+        fetch_k = k * 4  # Fetch more candidates for diversity selection
+        
+        # Expand query with related terms
+        queries = self._expand_query(query)
+        
+        # Collect docs from all query variations
+        all_docs = []
+        seen_contents = set()
+        
+        for q in queries:
+            # Use MMR search for more diverse results
+            try:
+                docs = self.vectorstore.max_marginal_relevance_search(
+                    q, 
+                    k=k,
+                    fetch_k=fetch_k,
+                    lambda_mult=0.7  # Balance between relevance (1.0) and diversity (0.0)
+                )
+            except Exception:
+                # Fallback to regular similarity search if MMR fails
+                docs = self.vectorstore.similarity_search(q, k=k)
+            
+            # Deduplicate by content
+            for doc in docs:
+                content_hash = hash(doc.page_content)
+                if content_hash not in seen_contents:
+                    seen_contents.add(content_hash)
+                    all_docs.append(doc)
+        
+        # Limit to k documents (prioritize first query results)
+        docs = all_docs[:k]
         
         # Format each document to include metadata in the content
         formatted_docs = []
@@ -59,6 +112,12 @@ def setup_qa_chain(vectorstore):
     If information comes from multiple sources, mention all relevant sources.
     
     For questions about auditors, financial statements, or accounting matters, pay special attention to the audit report and financial statement sections.
+    
+    IMPORTANT: Look for related concepts, metaphors, and famous quotes in the context. For example:
+    - "Tide going out" relates to Buffett's famous quote about swimming naked
+    - Financial metaphors and aphorisms should be connected to their full context
+    
+    Search thoroughly through all provided context before concluding information is not available.
     If you cannot find the information in the provided context, say so explicitly.
     
     Context: {context}
@@ -68,10 +127,11 @@ def setup_qa_chain(vectorstore):
     Answer: Based on the Berkshire Hathaway documents:
     """
     
-    # Use our custom retriever
+    # Use our custom retriever with higher k for better recall
+    # MMR will fetch 4x this amount as candidates and select diverse subset
     custom_retriever = MetadataRetriever(
         vectorstore=vectorstore, 
-        search_kwargs={"k": 15}
+        search_kwargs={"k": 20}
     )
     
     qa_chain = RetrievalQA.from_chain_type(
