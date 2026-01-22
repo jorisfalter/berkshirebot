@@ -22,22 +22,38 @@ class MetadataRetriever(BaseRetriever):
         content_lower = doc_content.lower()
         query_lower = query.lower()
         
+        score = 0.0
+        
+        # Big bonus for exact phrase match (or close variation)
+        if query_lower in content_lower:
+            score += 2.0
+        else:
+            # Check for phrase with word order preserved (allowing gaps)
+            query_words = query_lower.split()
+            if len(query_words) >= 2:
+                # Check if all words appear in order (with possible gaps)
+                last_idx = -1
+                ordered_match = True
+                for word in query_words:
+                    idx = content_lower.find(word, last_idx + 1)
+                    if idx == -1:
+                        ordered_match = False
+                        break
+                    last_idx = idx
+                if ordered_match:
+                    score += 1.5
+        
         # Extract meaningful words (3+ chars, not common stop words)
-        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should'}
+        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'when', 'who', 'what', 'where', 'why', 'how'}
         query_words = [w for w in query_lower.split() if len(w) >= 3 and w not in stop_words]
         
-        if not query_words:
-            return 0.0
+        if query_words:
+            # Count how many query words appear in the document
+            matches = sum(1 for word in query_words if word in content_lower)
+            word_score = matches / len(query_words)
+            score += word_score * 0.5  # Add word matching as bonus
         
-        # Count how many query words appear in the document
-        matches = sum(1 for word in query_words if word in content_lower)
-        score = matches / len(query_words)
-        
-        # Bonus for exact phrase match
-        if query_lower in content_lower:
-            score += 1.0
-        
-        return score
+        return min(score, 3.0)  # Cap at 3.0
     
     def _get_relevant_documents(self, query: str) -> List[Document]:
         k = self.search_kwargs.get("k", 8)
@@ -45,7 +61,8 @@ class MetadataRetriever(BaseRetriever):
         logger.info(f"Retrieving documents for query: '{query}'")
         
         # Fetch more documents than needed for reranking
-        fetch_k = k * 4  # Get 4x more candidates
+        # Since we know quotes can be missed by semantic search, cast a wider net
+        fetch_k = min(k * 6, 100)  # Get 6x more candidates (up to 100)
         
         try:
             # Semantic search - get more candidates
@@ -66,8 +83,9 @@ class MetadataRetriever(BaseRetriever):
             semantic_score = 1.0  # All docs from semantic search are relevant
             keyword_score = self._keyword_score(doc.page_content, query)
             
-            # Combined score: 60% semantic, 40% keyword (boost keyword matches)
-            combined_score = 0.6 * semantic_score + 0.4 * keyword_score
+            # Combined score: 40% semantic, 60% keyword (heavily favor keyword matches)
+            # This is important because semantic search can miss exact phrases
+            combined_score = 0.4 * semantic_score + 0.6 * keyword_score
             
             scored_docs.append((doc, combined_score, keyword_score))
         
