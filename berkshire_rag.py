@@ -65,12 +65,11 @@ class MetadataRetriever(BaseRetriever):
             word_score = matches / len(query_words) if query_words else 0
             score += word_score * 0.5  # Add word matching as bonus
         else:
-            # If all words are stop words, check for important single words
+            # If all words are stop words, still check if any query words appear
             all_query_words = query_lower.split()
-            important_words = ['swimming', 'naked', 'tide', 'goes', 'out', 'discover']
-            matches = sum(1 for word in all_query_words if word in important_words and word in content_lower)
+            matches = sum(1 for word in all_query_words if len(word) >= 2 and word in content_lower)
             if matches > 0:
-                score += matches * 0.3  # Smaller bonus for single important words
+                score += matches * 0.2  # Small bonus for any word matches
         
         return min(score, 3.0)  # Cap at 3.0
     
@@ -130,6 +129,13 @@ class MetadataRetriever(BaseRetriever):
         
         logger.info(f"Returning {len(unique_docs)} unique documents (top {k} after hybrid reranking)")
         
+        # Log if we found keyword matches in top results
+        top_keyword_matches = sum(1 for _, _, kw_score in scored_docs[:k] if kw_score > 0.5)
+        if top_keyword_matches > 0:
+            logger.info(f"✓ Found {top_keyword_matches} documents with strong keyword matches in top {k}")
+        else:
+            logger.warning(f"⚠ No strong keyword matches in top {k} results - may need more candidates")
+        
         # Format each document to include metadata in the content
         formatted_docs = []
         for doc in unique_docs[:k]:
@@ -174,10 +180,14 @@ def setup_qa_chain(vectorstore):
     
     For questions about auditors, financial statements, or accounting matters, pay special attention to the audit report and financial statement sections.
     
-    IMPORTANT: Look for related concepts, metaphors, and famous quotes in the context. Financial metaphors and aphorisms should be connected to their full context.
+    IMPORTANT: 
+    - Look for related concepts, metaphors, and famous quotes in the context. Financial metaphors and aphorisms should be connected to their full context.
+    - If the question asks about a specific phrase or quote, search for that phrase AND variations of it (e.g., "swimming naked" might appear as "who's been swimming naked" or "swimming naked when the tide goes out").
+    - Phrases may be split across lines or formatted differently - look for the key words even if not in exact order.
+    - If you find the information in ANY of the provided context, you MUST answer the question using that information.
     
-    Search thoroughly through all provided context before concluding information is not available.
-    If you cannot find the information in the provided context, say so explicitly.
+    Search thoroughly through ALL provided context before concluding information is not available.
+    Only say information is not available if you have checked every piece of context and cannot find it.
     
     Context: {context}
     

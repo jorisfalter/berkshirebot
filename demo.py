@@ -31,9 +31,19 @@ def answer_query(message, history):
         
         # Log source documents for debugging
         if 'source_documents' in response:
+            print(f"\n=== RETRIEVAL DEBUG ===")
+            print(f"Query: '{message}'")
             print(f"Retrieved {len(response['source_documents'])} source documents")
-            for i, doc in enumerate(response['source_documents'][:3]):
-                print(f"Source {i+1}: {doc.page_content[:150]}...")
+            for i, doc in enumerate(response['source_documents'][:5]):
+                content_lower = doc.page_content.lower()
+                has_swimming = "swimming" in content_lower and "naked" in content_lower
+                has_tide = "tide" in content_lower and "goes" in content_lower and "out" in content_lower
+                marker = "✓" if (has_swimming or has_tide) else " "
+                print(f"{marker} Source {i+1}: {doc.metadata.get('source', 'Unknown')}")
+                print(f"   Preview: {doc.page_content[:200]}...")
+                if has_swimming or has_tide:
+                    print(f"   ✓ CONTAINS QUOTE!")
+            print(f"=== END DEBUG ===\n")
         
         return result
     except Exception as e:
