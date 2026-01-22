@@ -14,6 +14,7 @@ pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 index = pc.Index("berkshire")
 
 # Create vector store from existing index
+# Must use same embedding model as indexing (text-embedding-3-small)
 vectorstore = PineconeVectorStore(
     index=index,
     embedding=OpenAIEmbeddings(model="text-embedding-3-small"),
@@ -32,7 +33,6 @@ demo = gr.ChatInterface(
     answer_query,
     title="Berkshire Hathaway AI Assistant",
     description="Ask questions about Berkshire Hathaway's documents.",
-    theme=gr.themes.Soft(primary_hue="blue", neutral_hue="slate"),
     examples=[
         "When did they write about swimming naked?",
         "What is the meaning of float in Berkshire's reports?",

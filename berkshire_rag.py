@@ -1,10 +1,14 @@
 from langchain_openai import ChatOpenAI
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
-from langchain.schema import BaseRetriever
+from langchain_core.retrievers import BaseRetriever
+from langchain_core.documents import Document
 from typing import List, Any, Dict
-from langchain.schema import Document
 from pydantic import Field
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class MetadataRetriever(BaseRetriever):
     """Custom retriever that formats documents with metadata for better citations"""
@@ -12,66 +16,53 @@ class MetadataRetriever(BaseRetriever):
     vectorstore: Any = Field(description="The vector store to retrieve from")
     search_kwargs: Dict = Field(default_factory=lambda: {"k": 8})
     
-    # Query expansions for common Buffett quotes and concepts
-    QUERY_EXPANSIONS: Dict[str, List[str]] = {
-        "tide": ["swimming naked", "tide goes out", "only when the tide goes out"],
-        "swimming naked": ["tide goes out", "who's been swimming naked"],
-        "moat": ["competitive advantage", "economic moat", "durable competitive advantage"],
-        "float": ["insurance float", "cost-free float", "insurance premiums"],
-        "mr. market": ["market fluctuations", "stock market emotions"],
-        "circle of competence": ["know what you know", "stay within"],
-    }
-    
-    def _expand_query(self, query: str) -> List[str]:
-        """Expand query with related terms for better retrieval"""
-        queries = [query]
-        query_lower = query.lower()
-        
-        for trigger, expansions in self.QUERY_EXPANSIONS.items():
-            if trigger in query_lower:
-                for expansion in expansions:
-                    # Create expanded query by appending related terms
-                    queries.append(f"{query} {expansion}")
-        
-        return queries
-    
     def _get_relevant_documents(self, query: str) -> List[Document]:
         k = self.search_kwargs.get("k", 8)
-        fetch_k = k * 4  # Fetch more candidates for diversity selection
         
-        # Expand query with related terms
-        queries = self._expand_query(query)
+        logger.info(f"Retrieving documents for query: '{query[:100]}...'")
         
-        # Collect docs from all query variations
-        all_docs = []
-        seen_contents = set()
-        
-        for q in queries:
-            # Use MMR search for more diverse results
+        # Use MMR for better diversity, but fallback to regular search if it fails
+        try:
+            # MMR: fetch more candidates, then select diverse subset
+            fetch_k = min(k * 5, 100)  # Fetch 5x more candidates
+            docs = self.vectorstore.max_marginal_relevance_search(
+                query,
+                k=k,
+                fetch_k=fetch_k,
+                lambda_mult=0.7  # Favor relevance (0.0 = max diversity, 1.0 = max relevance)
+            )
+            logger.info(f"MMR search returned {len(docs)} docs")
+        except Exception as e:
+            logger.warning(f"MMR search failed: {e}, falling back to similarity search")
+            # Fallback to regular similarity search
             try:
-                docs = self.vectorstore.max_marginal_relevance_search(
-                    q, 
-                    k=k,
-                    fetch_k=fetch_k,
-                    lambda_mult=0.7  # Balance between relevance (1.0) and diversity (0.0)
-                )
-            except Exception:
-                # Fallback to regular similarity search if MMR fails
-                docs = self.vectorstore.similarity_search(q, k=k)
-            
-            # Deduplicate by content
-            for doc in docs:
-                content_hash = hash(doc.page_content)
-                if content_hash not in seen_contents:
-                    seen_contents.add(content_hash)
-                    all_docs.append(doc)
+                docs = self.vectorstore.similarity_search(query, k=k * 2)
+                # Take top k by relevance (they're already sorted)
+                docs = docs[:k]
+                logger.info(f"Similarity search returned {len(docs)} docs")
+            except Exception as e2:
+                logger.error(f"Similarity search also failed: {e2}")
+                docs = []
         
-        # Limit to k documents (prioritize first query results)
-        docs = all_docs[:k]
+        if docs:
+            logger.info(f"First doc preview: {docs[0].page_content[:150]}...")
+        else:
+            logger.warning("No documents retrieved!")
+        
+        # Collect all unique docs (in case of duplicates)
+        seen = set()
+        unique_docs = []
+        for doc in docs:
+            content_hash = hash(doc.page_content)
+            if content_hash not in seen:
+                seen.add(content_hash)
+                unique_docs.append(doc)
+        
+        logger.info(f"Returning {len(unique_docs)} unique documents")
         
         # Format each document to include metadata in the content
         formatted_docs = []
-        for doc in docs:
+        for doc in unique_docs[:k]:
             metadata = doc.metadata
             source = metadata.get('source', 'Unknown Source')
             lines_from = metadata.get('loc.lines.from', '')
@@ -113,9 +104,7 @@ def setup_qa_chain(vectorstore):
     
     For questions about auditors, financial statements, or accounting matters, pay special attention to the audit report and financial statement sections.
     
-    IMPORTANT: Look for related concepts, metaphors, and famous quotes in the context. For example:
-    - "Tide going out" relates to Buffett's famous quote about swimming naked
-    - Financial metaphors and aphorisms should be connected to their full context
+    IMPORTANT: Look for related concepts, metaphors, and famous quotes in the context. Financial metaphors and aphorisms should be connected to their full context.
     
     Search thoroughly through all provided context before concluding information is not available.
     If you cannot find the information in the provided context, say so explicitly.
@@ -128,10 +117,10 @@ def setup_qa_chain(vectorstore):
     """
     
     # Use our custom retriever with higher k for better recall
-    # MMR will fetch 4x this amount as candidates and select diverse subset
+    # MMR will fetch 5x this amount as candidates and select diverse subset
     custom_retriever = MetadataRetriever(
         vectorstore=vectorstore, 
-        search_kwargs={"k": 20}
+        search_kwargs={"k": 30}  # Retrieve more documents for better coverage
     )
     
     qa_chain = RetrievalQA.from_chain_type(
