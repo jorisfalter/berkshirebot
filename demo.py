@@ -25,8 +25,23 @@ vectorstore = PineconeVectorStore(
 qa_chain = setup_qa_chain(vectorstore)
 
 def answer_query(message, history):
-    response = qa_chain.invoke({"query": message})
-    return response.get('result', str(response))
+    try:
+        response = qa_chain.invoke({"query": message})
+        result = response.get('result', str(response))
+        
+        # Log source documents for debugging
+        if 'source_documents' in response:
+            print(f"Retrieved {len(response['source_documents'])} source documents")
+            for i, doc in enumerate(response['source_documents'][:3]):
+                print(f"Source {i+1}: {doc.page_content[:150]}...")
+        
+        return result
+    except Exception as e:
+        error_msg = f"Error processing query: {str(e)}"
+        print(error_msg)
+        import traceback
+        traceback.print_exc()
+        return error_msg
 
 # Create the Gradio interface
 demo = gr.ChatInterface(

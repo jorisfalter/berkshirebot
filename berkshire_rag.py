@@ -19,35 +19,31 @@ class MetadataRetriever(BaseRetriever):
     def _get_relevant_documents(self, query: str) -> List[Document]:
         k = self.search_kwargs.get("k", 8)
         
-        logger.info(f"Retrieving documents for query: '{query[:100]}...'")
+        logger.info(f"Retrieving documents for query: '{query}'")
+        logger.info(f"Vectorstore type: {type(self.vectorstore)}")
         
-        # Use MMR for better diversity, but fallback to regular search if it fails
+        # Use simple similarity search - most reliable
         try:
-            # MMR: fetch more candidates, then select diverse subset
-            fetch_k = min(k * 5, 100)  # Fetch 5x more candidates
-            docs = self.vectorstore.max_marginal_relevance_search(
-                query,
-                k=k,
-                fetch_k=fetch_k,
-                lambda_mult=0.7  # Favor relevance (0.0 = max diversity, 1.0 = max relevance)
-            )
-            logger.info(f"MMR search returned {len(docs)} docs")
+            # Search for more documents to ensure we get good results
+            docs = self.vectorstore.similarity_search(query, k=k)
+            logger.info(f"Similarity search returned {len(docs)} documents")
+            
+            if not docs:
+                logger.error("No documents returned from similarity search!")
+                # Try with a simpler query
+                simple_query = query.split()[0] if query.split() else query
+                logger.info(f"Trying simpler query: '{simple_query}'")
+                docs = self.vectorstore.similarity_search(simple_query, k=k)
+                logger.info(f"Simple query returned {len(docs)} documents")
         except Exception as e:
-            logger.warning(f"MMR search failed: {e}, falling back to similarity search")
-            # Fallback to regular similarity search
-            try:
-                docs = self.vectorstore.similarity_search(query, k=k * 2)
-                # Take top k by relevance (they're already sorted)
-                docs = docs[:k]
-                logger.info(f"Similarity search returned {len(docs)} docs")
-            except Exception as e2:
-                logger.error(f"Similarity search also failed: {e2}")
-                docs = []
+            logger.error(f"Similarity search failed: {e}", exc_info=True)
+            docs = []
         
         if docs:
-            logger.info(f"First doc preview: {docs[0].page_content[:150]}...")
+            logger.info(f"First doc preview: {docs[0].page_content[:200]}...")
+            logger.info(f"First doc metadata: {docs[0].metadata}")
         else:
-            logger.warning("No documents retrieved!")
+            logger.error("No documents retrieved! This is a critical error.")
         
         # Collect all unique docs (in case of duplicates)
         seen = set()
@@ -117,7 +113,13 @@ def setup_qa_chain(vectorstore):
     """
     
     # Use our custom retriever with higher k for better recall
-    # MMR will fetch 5x this amount as candidates and select diverse subset
+    # Test the vectorstore first
+    try:
+        test_results = vectorstore.similarity_search("test", k=1)
+        logger.info(f"Vectorstore test successful, returned {len(test_results)} docs")
+    except Exception as e:
+        logger.error(f"Vectorstore test failed: {e}", exc_info=True)
+    
     custom_retriever = MetadataRetriever(
         vectorstore=vectorstore, 
         search_kwargs={"k": 30}  # Retrieve more documents for better coverage
