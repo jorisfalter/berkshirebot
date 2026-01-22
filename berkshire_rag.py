@@ -6,6 +6,7 @@ from langchain_core.documents import Document
 from typing import List, Any, Dict
 from pydantic import Field
 import logging
+import re
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -16,45 +17,81 @@ class MetadataRetriever(BaseRetriever):
     vectorstore: Any = Field(description="The vector store to retrieve from")
     search_kwargs: Dict = Field(default_factory=lambda: {"k": 8})
     
+    def _keyword_score(self, doc_content: str, query: str) -> float:
+        """Score document based on keyword matches"""
+        content_lower = doc_content.lower()
+        query_lower = query.lower()
+        
+        # Extract meaningful words (3+ chars, not common stop words)
+        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should'}
+        query_words = [w for w in query_lower.split() if len(w) >= 3 and w not in stop_words]
+        
+        if not query_words:
+            return 0.0
+        
+        # Count how many query words appear in the document
+        matches = sum(1 for word in query_words if word in content_lower)
+        score = matches / len(query_words)
+        
+        # Bonus for exact phrase match
+        if query_lower in content_lower:
+            score += 1.0
+        
+        return score
+    
     def _get_relevant_documents(self, query: str) -> List[Document]:
         k = self.search_kwargs.get("k", 8)
         
         logger.info(f"Retrieving documents for query: '{query}'")
-        logger.info(f"Vectorstore type: {type(self.vectorstore)}")
         
-        # Use simple similarity search - most reliable
+        # Fetch more documents than needed for reranking
+        fetch_k = k * 4  # Get 4x more candidates
+        
         try:
-            # Search for more documents to ensure we get good results
-            docs = self.vectorstore.similarity_search(query, k=k)
-            logger.info(f"Similarity search returned {len(docs)} documents")
-            
-            if not docs:
-                logger.error("No documents returned from similarity search!")
-                # Try with a simpler query
-                simple_query = query.split()[0] if query.split() else query
-                logger.info(f"Trying simpler query: '{simple_query}'")
-                docs = self.vectorstore.similarity_search(simple_query, k=k)
-                logger.info(f"Simple query returned {len(docs)} documents")
+            # Semantic search - get more candidates
+            docs = self.vectorstore.similarity_search(query, k=fetch_k)
+            logger.info(f"Semantic search returned {len(docs)} documents")
         except Exception as e:
             logger.error(f"Similarity search failed: {e}", exc_info=True)
             docs = []
         
-        if docs:
-            logger.info(f"First doc preview: {docs[0].page_content[:200]}...")
-            logger.info(f"First doc metadata: {docs[0].metadata}")
-        else:
-            logger.error("No documents retrieved! This is a critical error.")
+        if not docs:
+            logger.error("No documents retrieved!")
+            return []
         
-        # Collect all unique docs (in case of duplicates)
-        seen = set()
-        unique_docs = []
+        # Hybrid approach: Combine semantic similarity with keyword matching
+        # Score each document
+        scored_docs = []
         for doc in docs:
+            semantic_score = 1.0  # All docs from semantic search are relevant
+            keyword_score = self._keyword_score(doc.page_content, query)
+            
+            # Combined score: 60% semantic, 40% keyword (boost keyword matches)
+            combined_score = 0.6 * semantic_score + 0.4 * keyword_score
+            
+            scored_docs.append((doc, combined_score, keyword_score))
+        
+        # Sort by combined score (keyword matches get boost)
+        scored_docs.sort(key=lambda x: x[1], reverse=True)
+        
+        # Log top results
+        logger.info(f"Top 3 results after hybrid reranking:")
+        for i, (doc, combined_score, keyword_score) in enumerate(scored_docs[:3], 1):
+            logger.info(f"  {i}. Score: {combined_score:.3f} (keyword: {keyword_score:.3f})")
+            logger.info(f"     Preview: {doc.page_content[:150]}...")
+        
+        # Take top k unique documents
+        unique_docs = []
+        seen = set()
+        for doc, score, keyword_score in scored_docs:
             content_hash = hash(doc.page_content)
             if content_hash not in seen:
                 seen.add(content_hash)
                 unique_docs.append(doc)
+                if len(unique_docs) >= k:
+                    break
         
-        logger.info(f"Returning {len(unique_docs)} unique documents")
+        logger.info(f"Returning {len(unique_docs)} unique documents (top {k} after hybrid reranking)")
         
         # Format each document to include metadata in the content
         formatted_docs = []
