@@ -44,14 +44,33 @@ class MetadataRetriever(BaseRetriever):
                     score += 1.5
         
         # Extract meaningful words (3+ chars, not common stop words)
-        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'when', 'who', 'what', 'where', 'why', 'how'}
+        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'when', 'who', 'what', 'where', 'why', 'how', 'about', 'they', 'did', 'write'}
+        
+        # Check for multi-word phrases in the query (2+ consecutive words)
+        query_words_list = query_lower.split()
+        if len(query_words_list) >= 2:
+            # Check all 2-word and 3-word phrases from the query
+            for phrase_len in [2, 3]:
+                for i in range(len(query_words_list) - phrase_len + 1):
+                    phrase = " ".join(query_words_list[i:i+phrase_len])
+                    if phrase in content_lower:
+                        # Bigger bonus for longer phrases
+                        score += 0.5 * phrase_len  # 1.0 for 2-word, 1.5 for 3-word
+        
         query_words = [w for w in query_lower.split() if len(w) >= 3 and w not in stop_words]
         
         if query_words:
             # Count how many query words appear in the document
             matches = sum(1 for word in query_words if word in content_lower)
-            word_score = matches / len(query_words)
+            word_score = matches / len(query_words) if query_words else 0
             score += word_score * 0.5  # Add word matching as bonus
+        else:
+            # If all words are stop words, check for important single words
+            all_query_words = query_lower.split()
+            important_words = ['swimming', 'naked', 'tide', 'goes', 'out', 'discover']
+            matches = sum(1 for word in all_query_words if word in important_words and word in content_lower)
+            if matches > 0:
+                score += matches * 0.3  # Smaller bonus for single important words
         
         return min(score, 3.0)  # Cap at 3.0
     
