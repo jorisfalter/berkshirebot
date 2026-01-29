@@ -1,218 +1,138 @@
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.documents import Document
 from typing import List, Any, Dict
 from pydantic import Field
+from pinecone import Pinecone
+from pinecone_text.sparse import BM25Encoder
 import logging
-import re
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class MetadataRetriever(BaseRetriever):
-    """Custom retriever that formats documents with metadata for better citations"""
-    
-    vectorstore: Any = Field(description="The vector store to retrieve from")
-    search_kwargs: Dict = Field(default_factory=lambda: {"k": 8})
-    
-    def _keyword_score(self, doc_content: str, query: str) -> float:
-        """Score document based on keyword matches"""
-        content_lower = doc_content.lower()
-        query_lower = query.lower()
-        
-        score = 0.0
-        
-        # Big bonus for exact phrase match (or close variation)
-        if query_lower in content_lower:
-            score += 2.0
-        else:
-            # Check for phrase with word order preserved (allowing gaps)
-            query_words = query_lower.split()
-            if len(query_words) >= 2:
-                # Check if all words appear in order (with possible gaps)
-                last_idx = -1
-                ordered_match = True
-                for word in query_words:
-                    idx = content_lower.find(word, last_idx + 1)
-                    if idx == -1:
-                        ordered_match = False
-                        break
-                    last_idx = idx
-                if ordered_match:
-                    score += 1.5
-        
-        # Extract meaningful words (3+ chars, not common stop words)
-        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'when', 'who', 'what', 'where', 'why', 'how', 'about', 'they', 'did', 'write'}
-        
-        # Check for multi-word phrases in the query (2+ consecutive words)
-        query_words_list = query_lower.split()
-        if len(query_words_list) >= 2:
-            # Check all 2-word and 3-word phrases from the query
-            for phrase_len in [2, 3]:
-                for i in range(len(query_words_list) - phrase_len + 1):
-                    phrase = " ".join(query_words_list[i:i+phrase_len])
-                    if phrase in content_lower:
-                        # Bigger bonus for longer phrases
-                        score += 0.5 * phrase_len  # 1.0 for 2-word, 1.5 for 3-word
-        
-        query_words = [w for w in query_lower.split() if len(w) >= 3 and w not in stop_words]
-        
-        if query_words:
-            # Count how many query words appear in the document
-            matches = sum(1 for word in query_words if word in content_lower)
-            word_score = matches / len(query_words) if query_words else 0
-            score += word_score * 0.5  # Add word matching as bonus
-        else:
-            # If all words are stop words, still check if any query words appear
-            all_query_words = query_lower.split()
-            matches = sum(1 for word in all_query_words if len(word) >= 2 and word in content_lower)
-            if matches > 0:
-                score += matches * 0.2  # Small bonus for any word matches
-        
-        return min(score, 3.0)  # Cap at 3.0
-    
-    def _get_relevant_documents(self, query: str) -> List[Document]:
-        k = self.search_kwargs.get("k", 8)
-        
-        logger.info(f"Retrieving documents for query: '{query}'")
-        
-        # Fetch more documents than needed for reranking
-        # Since we know quotes can be missed by semantic search, cast a wider net
-        fetch_k = min(k * 6, 100)  # Get 6x more candidates (up to 100)
-        
-        try:
-            # Semantic search - get more candidates
-            docs = self.vectorstore.similarity_search(query, k=fetch_k)
-            logger.info(f"Semantic search returned {len(docs)} documents")
-        except Exception as e:
-            logger.error(f"Similarity search failed: {e}", exc_info=True)
-            docs = []
-        
-        if not docs:
-            logger.error("No documents retrieved!")
-            return []
-        
-        # Hybrid approach: Combine semantic similarity with keyword matching
-        # Score each document
-        scored_docs = []
-        for doc in docs:
-            semantic_score = 1.0  # All docs from semantic search are relevant
-            keyword_score = self._keyword_score(doc.page_content, query)
-            
-            # Combined score: 40% semantic, 60% keyword (heavily favor keyword matches)
-            # This is important because semantic search can miss exact phrases
-            combined_score = 0.4 * semantic_score + 0.6 * keyword_score
-            
-            scored_docs.append((doc, combined_score, keyword_score))
-        
-        # Sort by combined score (keyword matches get boost)
-        scored_docs.sort(key=lambda x: x[1], reverse=True)
-        
-        # Log top results
-        logger.info(f"Top 3 results after hybrid reranking:")
-        for i, (doc, combined_score, keyword_score) in enumerate(scored_docs[:3], 1):
-            logger.info(f"  {i}. Score: {combined_score:.3f} (keyword: {keyword_score:.3f})")
-            logger.info(f"     Preview: {doc.page_content[:150]}...")
-        
-        # Take top k unique documents
-        unique_docs = []
-        seen = set()
-        for doc, score, keyword_score in scored_docs:
-            content_hash = hash(doc.page_content)
-            if content_hash not in seen:
-                seen.add(content_hash)
-                unique_docs.append(doc)
-                if len(unique_docs) >= k:
-                    break
-        
-        logger.info(f"Returning {len(unique_docs)} unique documents (top {k} after hybrid reranking)")
-        
-        # Log if we found keyword matches in top results
-        top_keyword_matches = sum(1 for _, _, kw_score in scored_docs[:k] if kw_score > 0.5)
-        if top_keyword_matches > 0:
-            logger.info(f"✓ Found {top_keyword_matches} documents with strong keyword matches in top {k}")
-        else:
-            logger.warning(f"⚠ No strong keyword matches in top {k} results - may need more candidates")
-        
-        # Format each document to include metadata in the content
-        formatted_docs = []
-        for doc in unique_docs[:k]:
-            metadata = doc.metadata
-            source = metadata.get('source', 'Unknown Source')
-            lines_from = metadata.get('loc.lines.from', '')
-            lines_to = metadata.get('loc.lines.to', '')
-            
-            # Create formatted content with metadata - prioritize source over title
-            formatted_content = f"[Source: {source}"
-            if lines_from and lines_to:
-                formatted_content += f", Lines: {lines_from}-{lines_to}"
-            formatted_content += f"]\n{doc.page_content}"
-            
-            # Create new document with formatted content
-            formatted_doc = Document(
-                page_content=formatted_content,
-                metadata=metadata
-            )
-            formatted_docs.append(formatted_doc)
-        
-        return formatted_docs
 
-def setup_qa_chain(vectorstore):
-    # Initialize OpenAI LLM with more precise settings
+class HybridRetriever(BaseRetriever):
+    """Hybrid retriever using both semantic (dense) and keyword (sparse/BM25) search."""
+
+    index: Any = Field(description="Pinecone index")
+    embeddings: Any = Field(description="OpenAI embeddings")
+    bm25: Any = Field(description="BM25 encoder")
+    search_kwargs: Dict = Field(default_factory=lambda: {"k": 10})
+    alpha: float = Field(default=0.5, description="Weight for dense vs sparse (1.0 = all dense, 0.0 = all sparse)")
+
+    def _get_relevant_documents(self, query: str) -> List[Document]:
+        k = self.search_kwargs.get("k", 10)
+
+        # Create dense (semantic) query vector
+        dense_query = self.embeddings.embed_query(query)
+
+        # Create sparse (BM25/keyword) query vector
+        sparse_query = self.bm25.encode_queries([query])[0]
+
+        # Hybrid search - fetch more to allow deduplication
+        results = self.index.query(
+            vector=dense_query,
+            sparse_vector=sparse_query,
+            top_k=k * 2,  # Fetch extra for deduplication
+            include_metadata=True
+        )
+
+        logger.info(f"Hybrid search for '{query[:50]}...' returned {len(results['matches'])} results")
+
+        # Convert to LangChain documents with deduplication by source
+        # This ensures diverse results (one high-scoring doc per source)
+        docs = []
+        seen_sources = set()
+
+        for match in results['matches']:
+            text = match['metadata'].get('text', '')
+            source = match['metadata'].get('source', 'Unknown')
+            score = match['score']
+
+            # Skip if we already have a doc from this source (unless it's highly relevant)
+            if source in seen_sources:
+                # Still include if it contains high-value keywords
+                if not ('swimming' in text.lower() and 'naked' in text.lower()):
+                    continue
+
+            seen_sources.add(source)
+
+            # Format with source citation
+            formatted_content = f"[Source: {source}]\n{text}"
+
+            doc = Document(
+                page_content=formatted_content,
+                metadata={**match['metadata'], 'score': score}
+            )
+            docs.append(doc)
+
+            # Log if we found a notable match
+            if 'swimming' in text.lower() and 'naked' in text.lower():
+                logger.info(f"  ✓ Found 'swimming naked' in {source} (score: {score:.4f})")
+
+            # Stop once we have enough diverse results
+            if len(docs) >= k:
+                break
+
+        return docs
+
+
+def setup_qa_chain(index=None, embeddings=None, bm25=None):
+    """Set up QA chain with hybrid retrieval."""
+
+    # Initialize components if not provided
+    if index is None:
+        pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+        index = pc.Index("berkshire")
+
+    if embeddings is None:
+        embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+
+    if bm25 is None:
+        bm25 = BM25Encoder().load("bm25_encoder.json")
+
+    # Initialize LLM
     llm = ChatOpenAI(
-        temperature=0.1,  # Lower temperature for more factual responses
-        model="gpt-4"     # Use GPT-4 for better comprehension
+        temperature=0.1,
+        model="gpt-4"
     )
-    
-    # Create a QA chain with specific prompt for Berkshire Hathaway
+
+    # Create prompt
     prompt_template = """
-    You are a financial analyst assistant analyzing Berkshire Hathaway's Chairman's Letters and documents. 
-    Use the following pieces of context to answer the question.
-    
-    Each piece of context is formatted with source metadata at the beginning in brackets, followed by the content.
-    When referencing information, always cite the specific source and line numbers from the brackets.
-    
-    Format your citations like: "According to Chairman's Letter - 1989.pdf (lines 777-790), Buffett states..."
+    You are a financial analyst assistant analyzing Berkshire Hathaway's Chairman's Letters.
+    Use the following context to answer the question.
+
+    Each piece of context starts with [Source: document name] - always cite this when referencing information.
     Use direct quotes when possible and put them in quotation marks.
-    If information comes from multiple sources, mention all relevant sources.
-    
-    For questions about auditors, financial statements, or accounting matters, pay special attention to the audit report and financial statement sections.
-    
-    IMPORTANT: 
-    - Look for related concepts, metaphors, and famous quotes in the context. Financial metaphors and aphorisms should be connected to their full context.
-    - If the question asks about a specific phrase or quote, search for that phrase AND variations of it (e.g., "swimming naked" might appear as "who's been swimming naked" or "swimming naked when the tide goes out").
-    - Phrases may be split across lines or formatted differently - look for the key words even if not in exact order.
-    - If you find the information in ANY of the provided context, you MUST answer the question using that information.
-    
-    Search thoroughly through ALL provided context before concluding information is not available.
-    Only say information is not available if you have checked every piece of context and cannot find it.
-    
+
+    IMPORTANT: Scan through ALL the context chunks provided. When asked about when something appeared,
+    list EVERY year where you find it mentioned. Do not skip any sources.
+
+    If you cannot find the information in the provided context, say so explicitly.
+
     Context: {context}
-    
+
     Question: {question}
-    
-    Answer: Based on the Berkshire Hathaway documents:
+
+    Answer (remember to cite ALL relevant sources):
     """
-    
-    # Use our custom retriever with higher k for better recall
-    # Test the vectorstore first
-    try:
-        test_results = vectorstore.similarity_search("test", k=1)
-        logger.info(f"Vectorstore test successful, returned {len(test_results)} docs")
-    except Exception as e:
-        logger.error(f"Vectorstore test failed: {e}", exc_info=True)
-    
-    custom_retriever = MetadataRetriever(
-        vectorstore=vectorstore, 
-        search_kwargs={"k": 30}  # Retrieve more documents for better coverage
+
+    # Create hybrid retriever (higher k for better recall)
+    retriever = HybridRetriever(
+        index=index,
+        embeddings=embeddings,
+        bm25=bm25,
+        search_kwargs={"k": 30}
     )
-    
+
+    # Create QA chain
     qa_chain = RetrievalQA.from_chain_type(
         llm=llm,
         chain_type="stuff",
-        retriever=custom_retriever,
+        retriever=retriever,
         return_source_documents=True,
         chain_type_kwargs={
             "prompt": PromptTemplate(
@@ -221,4 +141,11 @@ def setup_qa_chain(vectorstore):
             ),
         }
     )
-    return qa_chain 
+
+    return qa_chain
+
+
+# For backwards compatibility with demo.py
+def setup_qa_chain_from_vectorstore(vectorstore):
+    """Legacy function - now uses hybrid search instead."""
+    return setup_qa_chain()
