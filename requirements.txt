@@ -1,6 +1,7 @@
 gradio>=4.0.0
 openai>=1.0.0
 pinecone-client>=3.0.0
+pinecone-text
 langchain==0.1.20
 langchain-community==0.0.38
 langchain-core==0.1.52

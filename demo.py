@@ -45,8 +45,7 @@ demo = gr.ChatInterface(
         "When did Buffett write about swimming naked?",
         "What is the meaning of float in Berkshire's reports?",
         "Who is Ajit Jain?"
-    ],
-    fill_height=True
+    ]
 )
 
 # Launch the interface
