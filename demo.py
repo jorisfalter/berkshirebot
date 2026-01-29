@@ -6,15 +6,16 @@ import os
 # Load environment variables
 load_dotenv()
 
-# Setup QA chain with hybrid search
-print("Initializing hybrid search QA chain...")
+# Setup conversational QA chain with hybrid search
+print("Initializing conversational QA chain with hybrid search...")
 qa_chain = setup_qa_chain()
 print("Ready!")
 
 def answer_query(message, history):
     try:
-        response = qa_chain.invoke({"query": message})
-        result = response.get('result', str(response))
+        # Use 'question' key for ConversationalRetrievalChain
+        response = qa_chain.invoke({"question": message})
+        result = response.get('answer', str(response))
 
         # Log source documents for debugging
         if 'source_documents' in response:
@@ -44,7 +45,8 @@ demo = gr.ChatInterface(
         "When did Buffett write about swimming naked?",
         "What is the meaning of float in Berkshire's reports?",
         "Who is Ajit Jain?"
-    ]
+    ],
+    fill_height=True
 )
 
 # Launch the interface
