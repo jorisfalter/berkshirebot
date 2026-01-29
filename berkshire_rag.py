@@ -101,12 +101,30 @@ def setup_qa_chain(index=None, embeddings=None, bm25=None):
         output_key="answer"
     )
 
+    # Custom condense question prompt that preserves keywords
+    condense_prompt = PromptTemplate(
+        template="""Given the following conversation and a follow up question, rephrase the follow up question to be a standalone question.
+
+IMPORTANT: Preserve ALL specific phrases, names, quotes, and keywords from the original question exactly as written.
+Do NOT paraphrase unique phrases like "swimming naked" into generic terms like "the concept of".
+Keep the exact wording of any quoted or distinctive phrases.
+
+Chat History:
+{chat_history}
+
+Follow Up Input: {question}
+
+Standalone question (preserve exact phrases):""",
+        input_variables=["chat_history", "question"]
+    )
+
     # Create conversational chain with memory
     qa_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=retriever,
         memory=memory,
         return_source_documents=True,
+        condense_question_prompt=condense_prompt,
         combine_docs_chain_kwargs={
             "prompt": PromptTemplate(
                 template="""You are a financial analyst assistant analyzing Berkshire Hathaway's Chairman's Letters.

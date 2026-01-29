@@ -42,7 +42,7 @@ demo = gr.ChatInterface(
     title="Berkshire Hathaway AI Assistant",
     description="Ask questions about Berkshire Hathaway's annual letters. Uses hybrid search (semantic + keyword) for better retrieval.",
     examples=[
-        "When did Buffett write about swimming naked?",
+        "When did they write about swimming naked?",
         "What is the meaning of float in Berkshire's reports?",
         "Who is Ajit Jain?"
     ]

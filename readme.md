@@ -2,6 +2,11 @@
 
 This repository contains various RAG (Retrieval-Augmented Generation) experiments focused on different document sources.
 
+### Berkshire-bot.com A Chat interface for interacting with the Berkshire database.
+
+`demo.py` - Used Gradio
+live on http://www.berkshire-bot.com/
+
 ## Projects
 
 ### Google Drive RAG
@@ -11,11 +16,6 @@ Imports my diet and alcohol docs from Google Drive into Pinecone for document re
 ### Walmart RAG
 
 Uploads the Walmart annual report to Pinecone for analysis and querying.
-
-### Berkshire-bot.com A Chat interface for interacting with the Berkshire database.
-
-`demo.py` - Used Gradio
-live on http://www.berkshire-bot.com/
 
 ### Podcast Transcripts (not finished)
 
